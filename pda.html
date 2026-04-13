@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+    <title>智能上架 - PDA版</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; }
+        body {
+            background: #1a3e4c;
+            font-family: system-ui, sans-serif;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+        }
+        .app {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            background: linear-gradient(135deg, #1a3e4c 0%, #0f2c36 100%);
+        }
+        .top-bar {
+            background: rgba(0,0,0,0.3);
+            padding: 12px 20px;
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: rgba(255,255,255,0.8);
+        }
+        .origin-bar {
+            background: rgba(0,0,0,0.3);
+            margin: 16px 20px 0 20px;
+            padding: 10px 16px;
+            border-radius: 40px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .origin-bar span:first-child { font-size: 12px; color: rgba(255,255,255,0.6); }
+        .origin-value { font-size: 14px; font-weight: bold; color: #ffc107; }
+        .origin-btn {
+            background: rgba(255,255,255,0.2);
+            border: none;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 11px;
+            cursor: pointer;
+        }
+        .progress-bar {
+            background: rgba(0,0,0,0.3);
+            margin: 10px 20px;
+            padding: 10px 20px;
+            border-radius: 40px;
+            display: flex;
+            justify-content: space-between;
+        }
+        .progress-value { font-size: 16px; font-weight: bold; color: #ffc107; }
+        .click-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+        }
+        .current-location {
+            font-size: 72px;
+            font-weight: bold;
+            color: #ffc107;
+            background: rgba(0,0,0,0.3);
+            padding: 30px 50px;
+            border-radius: 80px;
+            font-family: monospace;
+            letter-spacing: 6px;
+        }
+        .remaining { margin-top: 20px; font-size: 14px; color: rgba(255,255,255,0.5); }
+        .bottom-tip {
+            text-align: center;
+            padding: 16px;
+            color: rgba(255,255,255,0.4);
+            font-size: 12px;
+        }
+        .modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.85);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        .modal-box {
+            background: white;
+            border-radius: 32px;
+            padding: 32px 24px;
+            width: 90%;
+            max-width: 400px;
+            text-align: center;
+        }
+        .modal-box h3 { font-size: 24px; color: #1a3e4c; margin-bottom: 8px; }
+        .modal-box input {
+            width: 100%;
+            padding: 16px;
+            font-size: 20px;
+            text-align: center;
+            font-family: monospace;
+            border: 2px solid #ddd;
+            border-radius: 16px;
+            margin: 20px 0;
+        }
+        .modal-box button {
+            width: 100%;
+            padding: 14px;
+            background: #1e6f5c;
+            color: white;
+            border: none;
+            border-radius: 16px;
+            font-size: 18px;
+            font-weight: bold;
+            cursor: pointer;
+            margin-top: 12px;
+        }
+        .modal-box button.secondary { background: #6c757d; }
+        .modal-box button.danger { background: #dc3545; }
+        .hidden { display: none; }
+        .loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%,-50%);
+            background: rgba(0,0,0,0.8);
+            color: white;
+            padding: 16px 32px;
+            border-radius: 12px;
+            z-index: 1001;
+            display: none;
+        }
+    </style>
+    <script src="https://res.wx.qq.com/open/js/cloudbase/1.1.0/cloud.js"></script>
+</head>
+<body>
+
+<div class="loading" id="loading">⏳ 加载中...</div>
+
+<div class="app">
+    <div class="top-bar">
+        <span>📡 <span id="syncStatus">连接中...</span></span>
+        <span id="stats">加载中...</span>
+    </div>
+
+    <div class="origin-bar">
+        <span>📍 原点位</span>
+        <span class="origin-value" id="originValue">未设置</span>
+        <button class="origin-btn" id="originBtn">设置</button>
+    </div>
+
+    <div class="progress-bar">
+        <span>📊 上架进度</span>
+        <span class="progress-value" id="progress">0 / 0</span>
+    </div>
+
+    <div class="click-area" id="clickArea">
+        <div id="mainContent" style="text-align: center;">
+            <div style="font-size:18px;color:white;">加载中...</div>
+        </div>
+    </div>
+
+    <div class="bottom-tip">
+        👆 点击上面区域 → 确认上架 → 自动跳转
+    </div>
+</div>
+
+<div id="modal" class="modal hidden">
+    <div class="modal-box">
+        <h3>📍 设置原点位</h3>
+        <input type="text" id="originInput" placeholder="例如: LSYW16">
+        <button id="confirmBtn">确认设置</button>
+        <button id="clearBtn" class="danger">清除原点位</button>
+        <button id="closeBtn" class="secondary">取消</button>
+    </div>
+</div>
+
+<script>
+// ========== 请替换成你的环境ID ==========
+const ENV_ID = "kucang-5gtw04vlb8f04c39";
+// ===================================
+
+let locations = [];
+let origin = null;
+let currentIdx = 0;
+let db = null;
+
+async function init() {
+    showLoading(true);
+    try {
+        const app = cloudbase.init({ env: ENV_ID });
+        await app.auth().signInAnonymously();
+        db = app.database();
+        document.getElementById('syncStatus').innerText = '已连接';
+        await loadData();
+    } catch(e) {
+        document.getElementById('syncStatus').innerText = '离线模式';
+        loadLocal();
+    }
+    showLoading(false);
+}
+
+async function loadData() {
+    try {
+        const res = await db.collection('locations').get();
+        locations = res.data.map(item => ({ code: item.code, priority: item.priority }));
+        locations.sort((a,b) => a.priority - b.priority);
+        localStorage.setItem('locations', JSON.stringify(locations));
+        document.getElementById('stats').innerText = `📦 ${locations.length} 个`;
+        loadSettings();
+        refresh();
+    } catch(e) {
+        loadLocal();
+    }
+}
+
+function loadLocal() {
+    const saved = localStorage.getItem('locations');
+    if (saved) {
+        locations = JSON.parse(saved);
+        document.getElementById('stats').innerText = `📦 ${locations.length} 个`;
+    }
+    loadSettings();
+    refresh();
+}
+
+function loadSettings() {
+    const savedOrigin = localStorage.getItem('origin');
+    if (savedOrigin && locations.find(l => l.code === savedOrigin)) {
+        origin = savedOrigin;
+    } else {
+        origin = null;
+    }
+    document.getElementById('originValue').innerText = origin || '未设置(从第1个)';
+    
+    const savedIdx = localStorage.getItem('currentIdx');
+    if (savedIdx !== null) {
+        currentIdx = parseInt(savedIdx);
+    } else if (origin) {
+        const idx = locations.findIndex(l => l.code === origin);
+        currentIdx = idx !== -1 ? idx + 1 : 0;
+    } else {
+        currentIdx = 0;
+    }
+    if (currentIdx > locations.length) currentIdx = locations.length;
+    if (currentIdx < 0) currentIdx = 0;
+}
+
+function saveSettings() {
+    if (origin) localStorage.setItem('origin', origin);
+    else localStorage.removeItem('origin');
+    localStorage.setItem('currentIdx', currentIdx);
+}
+
+function refresh() {
+    const progress = document.getElementById('progress');
+    const main = document.getElementById('mainContent');
+    
+    if (locations.length === 0) {
+        progress.innerText = `0 / 0`;
+        main.innerHTML = `<div style="font-size:20px;color:white;">暂无库位数据</div>`;
+        return;
+    }
+    
+    progress.innerText = `${currentIdx} / ${locations.length}`;
+    
+    if (currentIdx >= locations.length) {
+        main.innerHTML = `
+            <div>
+                <div style="font-size:60px;margin-bottom:16px;">🎉</div>
+                <div style="font-size:28px;font-weight:bold;color:#28a745;">全部完成！</div>
+                <button id="resetBtn" style="margin-top:30px;padding:12px 30px;background:#ffc107;border:none;border-radius:40px;font-size:16px;font-weight:bold;cursor:pointer;">重新开始</button>
+            </div>
+        `;
+        const resetBtn = document.getElementById('resetBtn');
+        if (resetBtn) resetBtn.onclick = () => {
+            if (origin) {
+                const idx = locations.findIndex(l => l.code === origin);
+                currentIdx = idx !== -1 ? idx + 1 : 0;
+            } else {
+                currentIdx = 0;
+            }
+            saveSettings();
+            refresh();
+        };
+    } else {
+        const current = locations[currentIdx];
+        const remaining = locations.length - currentIdx;
+        main.innerHTML = `
+            <div class="current-location">${current.code}</div>
+            <div class="remaining">优先级 ${current.priority} | 剩余 ${remaining} 个</div>
+        `;
+    }
+}
+
+function next() {
+    if (locations.length === 0) return;
+    if (currentIdx >= locations.length) return;
+    if (navigator.vibrate) navigator.vibrate(50);
+    currentIdx++;
+    saveSettings();
+    refresh();
+}
+
+function openModal() {
+    document.getElementById('originInput').value = '';
+    document.getElementById('modal').classList.remove('hidden');
+}
+
+function closeModal() {
+    document.getElementById('modal').classList.add('hidden');
+}
+
+function setOrigin() {
+    const val = document.getElementById('originInput').value.trim().toUpperCase();
+    if (!val) { alert('请输入库位码'); return; }
+    const exists = locations.find(l => l.code === val);
+    if (!exists) { alert(`库位 "${val}" 不存在`); return; }
+    origin = val;
+    const idx = locations.findIndex(l => l.code === origin);
+    currentIdx = idx + 1;
+    if (currentIdx > locations.length) currentIdx = locations.length;
+    saveSettings();
+    document.getElementById('originValue').innerText = origin;
+    refresh();
+    closeModal();
+}
+
+function clearOrigin() {
+    origin = null;
+    currentIdx = 0;
+    saveSettings();
+    document.getElementById('originValue').innerText = '未设置(从第1个)';
+    refresh();
+    closeModal();
+}
+
+function showLoading(show) {
+    document.getElementById('loading').style.display = show ? 'flex' : 'none';
+}
+
+// 绑定事件
+document.getElementById('clickArea').addEventListener('click', (e) => {
+    if (e.target.id === 'resetBtn') return;
+    next();
+});
+document.getElementById('originBtn').onclick = openModal;
+document.getElementById('confirmBtn').onclick = setOrigin;
+document.getElementById('clearBtn').onclick = clearOrigin;
+document.getElementById('closeBtn').onclick = closeModal;
+document.getElementById('modal').onclick = (e) => { if (e.target === document.getElementById('modal')) closeModal(); };
+
+init();
+</script>
+</body>
+</html>
