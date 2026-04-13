@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>库位管理</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: system-ui; background: #f5f5f5; padding: 16px; }
+        .box { background: white; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+        .title { font-size: 20px; font-weight: bold; color: #1a6d5e; }
+        .sub { color: #666; font-size: 13px; margin-top: 5px; }
+        .toolbar { display: flex; gap: 10px; flex-wrap: wrap; margin: 15px 0; }
+        button { padding: 8px 16px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; }
+        .btn-green { background: #1a6d5e; color: white; }
+        .btn-red { background: #dc3545; color: white; }
+        .btn-gray { background: #6c757d; color: white; }
+        .btn-yellow { background: #ffc107; color: #333; }
+        input { padding: 8px 12px; border: 1px solid #ddd; border-radius: 20px; width: 200px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 10px; text-align: left; border-bottom: 1px solid #eee; }
+        th { background: #f8f9fa; }
+        .status { background: #e8f5e9; padding: 12px; border-radius: 8px; margin-bottom: 16px; font-size: 14px; }
+        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); justify-content: center; align-items: center; }
+        .modal-content { background: white; padding: 20px; border-radius: 12px; width: 300px; }
+        .modal input { width: 100%; margin: 8px 0; border-radius: 8px; }
+        textarea { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 8px; margin: 10px 0; }
+        .loading { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); background: rgba(0,0,0,0.8); color: white; padding: 16px 32px; border-radius: 12px; display: none; }
+    </style>
+    <script src="https://res.wx.qq.com/open/js/cloudbase/1.1.0/cloud.js"></script>
+</head>
+<body>
+
+<div class="loading" id="loading">⏳ 处理中...</div>
+
+<div style="max-width: 1200px; margin: 0 auto;">
+    <div class="box">
+        <div class="title">📦 库位数据管理</div>
+        <div class="sub">电脑更新后，所有人APP自动同步</div>
+    </div>
+
+    <div class="box">
+        <div class="status" id="statusBar">
+            🔄 正在连接云端...
+        </div>
+
+        <div class="toolbar">
+            <button class="btn-green" onclick="showAdd()">+ 新增库位</button>
+            <button class="btn-gray" onclick="showImport()">📂 批量导入</button>
+            <button class="btn-yellow" onclick="uploadToCloud()">☁️ 上传到云端</button>
+            <button class="btn-red" onclick="clearLocal()">🗑️ 清空</button>
+            <input type="text" id="searchInput" placeholder="搜索库位码..." onkeyup="search()">
+            <span id="count">共 0 个</span>
+        </div>
+
+        <div style="overflow-x: auto;">
+            <table id="table">
+                <thead><tr><th>库位码</th><th>优先级</th><th>操作</th></tr></thead>
+                <tbody id="tbody"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- 新增弹窗 -->
+<div id="modal" class="modal">
+    <div class="modal-content">
+        <h3 id="modalTitle">新增库位</h3>
+        <input type="text" id="code" placeholder="库位码 例如: LSYW16">
+        <input type="number" id="priority" placeholder="优先级 例如: 1">
+        <button class="btn-green" onclick="save()" style="width:100%">保存</button>
+        <button class="btn-gray" onclick="closeModal()" style="width:100%; margin-top:8px;">取消</button>
+    </div>
+</div>
+
+<!-- 批量导入弹窗 -->
+<div id="importModal" class="modal">
+    <div class="modal-content" style="width: 500px;">
+        <h3>批量导入库位</h3>
+        <textarea id="importData" rows="8" placeholder="每行格式：库位码 优先级&#10;例如：&#10;LSYW16 1&#10;LSYW17 2&#10;LSYW18 3"></textarea>
+        <div style="margin: 10px 0;">
+            <label><input type="radio" name="sep" value="tab" checked> 制表符(Tab)</label>
+            <label><input type="radio" name="sep" value="space"> 空格</label>
+        </div>
+        <button class="btn-green" onclick="doImport()" style="width:100%">确认导入</button>
+        <button class="btn-gray" onclick="closeImportModal()" style="width:100%; margin-top:8px;">取消</button>
+    </div>
+</div>
+
+<script>
+// ===== 第3步获取的环境ID，填在下面 =====
+const ENV_ID = "kucang-5gtw04vlb8f04c39";  // ← 把这里替换成你的环境ID
+// ===================================
+
+let locations = [];
+let editCode = null;
+let app = null;
+let db = null;
+
+// 初始化
+async function init() {
+    showLoading(true);
+    try {
+        app = cloudbase.init({ env: ENV_ID });
+        await app.auth().signInAnonymously();
+        db = app.database();
+        document.getElementById('statusBar').innerHTML = '✅ 云端已连接，正在同步数据...';
+        await loadFromCloud();
+    } catch(e) {
+        document.getElementById('statusBar').innerHTML = '⚠️ 云端连接失败，使用本地数据。请检查环境ID是否正确';
+        loadFromLocal();
+    }
+    showLoading(false);
+}
+
+// 从云端读取
+async function loadFromCloud() {
+    try {
+        const res = await db.collection('locations').get();
+        locations = res.data.map(item => ({ code: item.code, priority: item.priority }));
+        locations.sort((a,b) => a.priority - b.priority);
+        saveToLocal();
+        render();
+        document.getElementById('statusBar').innerHTML = '✅ 云端同步成功，共 ' + locations.length + ' 个库位';
+    } catch(e) {
+        loadFromLocal();
+    }
+}
+
+// 上传到云端
+async function uploadToCloud() {
+    if (locations.length === 0) {
+        alert('没有数据可上传');
+        return;
+    }
+    showLoading(true);
+    try {
+        // 清空旧数据
+        const old = await db.collection('locations').get();
+        for (let item of old.data) {
+            await db.collection('locations').doc(item._id).remove();
+        }
+        // 上传新数据
+        for (let loc of locations) {
+            await db.collection('locations').add({
+                code: loc.code,
+                priority: loc.priority
+            });
+        }
+        alert('✅ 上传成功！其他人打开APP会自动获取最新数据');
+        document.getElementById('statusBar').innerHTML = '✅ 已上传到云端，共 ' + locations.length + ' 个库位';
+    } catch(e) {
+        alert('上传失败：' + e.message);
+    }
+    showLoading(false);
+}
+
+// 本地存储
+function saveToLocal() {
+    localStorage.setItem('locations', JSON.stringify(locations));
+}
+
+function loadFromLocal() {
+    const saved = localStorage.getItem('locations');
+    if (saved) {
+        locations = JSON.parse(saved);
+        render();
+    }
+}
+
+function render() {
+    let search = document.getElementById('searchInput').value.toLowerCase();
+    let filtered = locations.filter(l => l.code.toLowerCase().includes(search));
+    let html = '';
+    for (let loc of filtered) {
+        html += `<tr>
+            <td><strong>${loc.code}</strong></td>
+            <td>${loc.priority}</td>
+            <td>
+                <button onclick="edit('${loc.code}')" style="padding:4px 12px;background:#1a6d5e;color:white;border:none;border-radius:5px;">编辑</button>
+                <button onclick="del('${loc.code}')" style="padding:4px 12px;background:#dc3545;color:white;border:none;border-radius:5px;">删除</button>
+            </td>
+        </tr>`;
+    }
+    document.getElementById('tbody').innerHTML = html || '<tr><td colspan="3">暂无数据，请点击批量导入</td></tr>';
+    document.getElementById('count').innerText = `共 ${locations.length} 个`;
+}
+
+function search() { render(); }
+
+function showAdd() {
+    editCode = null;
+    document.getElementById('modalTitle').innerText = '新增库位';
+    document.getElementById('code').value = '';
+    document.getElementById('priority').value = '';
+    document.getElementById('modal').style.display = 'flex';
+}
+
+function edit(code) {
+    let loc = locations.find(l => l.code === code);
+    if (loc) {
+        editCode = code;
+        document.getElementById('modalTitle').innerText = '编辑库位';
+        document.getElementById('code').value = loc.code;
+        document.getElementById('priority').value = loc.priority;
+        document.getElementById('modal').style.display = 'flex';
+    }
+}
+
+function save() {
+    let code = document.getElementById('code').value.trim().toUpperCase();
+    let priority = parseInt(document.getElementById('priority').value);
+    if (!code || isNaN(priority)) {
+        alert('请填写完整');
+        return;
+    }
+    if (editCode === null) {
+        if (locations.find(l => l.code === code)) {
+            alert('库位码已存在');
+            return;
+        }
+        locations.push({ code, priority });
+    } else {
+        let index = locations.findIndex(l => l.code === editCode);
+        if (index !== -1) locations[index] = { code, priority };
+    }
+    locations.sort((a,b) => a.priority - b.priority);
+    saveToLocal();
+    render();
+    closeModal();
+    alert('已保存到本地，记得点击「上传到云端」同步给其他人');
+}
+
+function del(code) {
+    if (confirm(`确定删除 ${code} 吗？`)) {
+        locations = locations.filter(l => l.code !== code);
+        saveToLocal();
+        render();
+        alert('已删除，记得点击「上传到云端」');
+    }
+}
+
+function clearLocal() {
+    if (confirm('清空所有数据？')) {
+        locations = [];
+        saveToLocal();
+        render();
+    }
+}
+
+function showImport() {
+    document.getElementById('importData').value = '';
+    document.getElementById('importModal').style.display = 'flex';
+}
+
+function doImport() {
+    let text = document.getElementById('importData').value;
+    if (!text.trim()) {
+        alert('请粘贴数据');
+        return;
+    }
+    let sep = document.querySelector('input[name="sep"]:checked').value;
+    let separator = sep === 'tab' ? '\t' : ' ';
+    let lines = text.split(/\r?\n/);
+    let newList = [];
+    for (let line of lines) {
+        line = line.trim();
+        if (!line) continue;
+        let parts = line.split(separator);
+        if (parts.length < 2) continue;
+        let code = parts[0].trim().toUpperCase();
+        let priority = parseInt(parts[1].trim());
+        if (code && !isNaN(priority)) {
+            newList.push({ code, priority });
+        }
+    }
+    if (newList.length === 0) {
+        alert('没有有效数据');
+        return;
+    }
+    // 合并去重
+    let map = new Map();
+    for (let l of locations) map.set(l.code, l);
+    for (let l of newList) map.set(l.code, l);
+    locations = Array.from(map.values());
+    locations.sort((a,b) => a.priority - b.priority);
+    saveToLocal();
+    render();
+    closeImportModal();
+    alert(`成功导入 ${newList.length} 个库位，记得点击「上传到云端」`);
+}
+
+function closeModal() { document.getElementById('modal').style.display = 'none'; }
+function closeImportModal() { document.getElementById('importModal').style.display = 'none'; }
+function showLoading(show) { document.getElementById('loading').style.display = show ? 'flex' : 'none'; }
+
+window.onclick = (e) => {
+    if (e.target === document.getElementById('modal')) closeModal();
+    if (e.target === document.getElementById('importModal')) closeImportModal();
+};
+
+init();
+</script>
+</body>
+</html>
